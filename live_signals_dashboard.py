@@ -61,13 +61,13 @@ CORE_PORTFOLIO = {
 CORE_TICKERS = list(CORE_PORTFOLIO.keys())
 
 # ── Momentum Portfolio ──────────────────────────────────────────────
-MOM_ETF_TICKERS      = ["VTI", "VEU", "BND", "BNDX", "VGIT", "GLD", "DBC", "SGOV"]
+MOM_ETF_TICKERS      = ["VTI", "VEU", "BND", "BNDX", "GLD", "DBC", "SGOV"]
 MOM_BTC_TICKER       = "BTC-USD"
 MOM_CASH_TICKER      = "SGOV"
 MOM_LOOKBACKS        = [21, 63, 126, 189, 252]
 MOM_MAX_LOOKBACK     = max(MOM_LOOKBACKS)
 MOM_SMA_PERIOD       = 168
-MOM_SMA_OVERRIDES    = {"BND": 126, "BNDX": 126, "VGIT": 126}
+MOM_SMA_OVERRIDES    = {"BND": 126, "BNDX": 126}
 MOM_VOL_LOOKBACK     = 63
 MOM_TARGET_VOL       = 0.20
 MOM_MAX_WEIGHT       = 1.0
@@ -85,7 +85,7 @@ DOW_TITANS = [
     "XOM", "CVX", "SHEL",
     "CAT", "GE",  "LIN", "ASML",
 ]
-TITANS_BENCHMARKS  = ["SHV", "VGIT", "ACWI"]
+TITANS_BENCHMARKS  = ["SHV", "BND", "ACWI"]
 TITANS_EMA_PERIOD  = 200
 
 # ── Cash Portfolio ───────────────────────────────────────────────────
@@ -424,7 +424,7 @@ def _period_return(s, days):
 
 def run_titans_signals(prices):
     bench = {}
-    for label,ticker,days in [("shv_6m","SHV",126),("vgit_6m","VGIT",126),
+    for label,ticker,days in [("shv_6m","SHV",126),("bnd_6m","BND",126),
                                ("acwi_3m","ACWI",63),("acwi_6m","ACWI",126),("acwi_1y","ACWI",252)]:
         s = prices.get(ticker)
         if s is not None:
@@ -440,10 +440,10 @@ def run_titans_signals(prices):
         above   = price > ema_val
         pct_ema = (price/ema_val-1)*100
         r3m=_period_return(s,63); r6m=_period_return(s,126); r1y=_period_return(s,252)
-        shv=bench.get("shv_6m"); vgit=bench.get("vgit_6m")
+        shv=bench.get("shv_6m"); bnd=bench.get("bnd_6m")
         a3m=bench.get("acwi_3m"); a6m=bench.get("acwi_6m"); a1y=bench.get("acwi_1y")
         f1=(r6m is not None and shv  is not None and r6m>shv)
-        f2=(r6m is not None and vgit is not None and r6m>vgit)
+        f2=(r6m is not None and bnd is not None and r6m>bnd)
         f3=(r3m is not None and a3m  is not None and r3m>a3m and
             r6m is not None and a6m  is not None and r6m>a6m and
             r1y is not None and a1y  is not None and r1y>a1y)
@@ -1141,7 +1141,7 @@ def build_momentum_tab(mom_sig, tv, mp):
     diag_card = html.Div(style=CARD, children=[
         html.H3("Full Asset Diagnostics",
                 style={"margin":"0 0 4px","fontSize":"13px","color":MUTED,"letterSpacing":"1px"}),
-        html.P(f"SMA gate: {MOM_SMA_PERIOD}d default (BND/BNDX/VGIT: 126d)  |  "
+        html.P(f"SMA gate: {MOM_SMA_PERIOD}d default (BND/BNDX: 126d)  |  "
                f"Abs momentum: 6m return > SGOV  |  Vol target: {MOM_TARGET_VOL:.0%}",
                style={"fontSize":"11px","color":MUTED,"margin":"0 0 12px"}),
         tbl_hdr,*tbl_rows,
@@ -1204,7 +1204,7 @@ def build_titans_tab(titans_rows, tv, tp):
         children=[html.Span(lbl,style={"color":MUTED}),
                   html.Span(f"{v:+.2f}%" if v is not None else "—",
                             style={"color":pcolor(v),"fontWeight":"600"})])
-        for lbl,key in [("SHV 6m","shv_6m"),("VGIT 6m","vgit_6m"),
+        for lbl,key in [("SHV 6m","shv_6m"),("BND 6m","bnd_6m"),
                          ("ACWI 3m","acwi_3m"),("ACWI 6m","acwi_6m"),("ACWI 1y","acwi_1y")]
         for v in [bench.get(key)]]
     bench_card=html.Div(style={**CARD,"marginBottom":"0"},children=[
@@ -1219,7 +1219,7 @@ def build_titans_tab(titans_rows, tv, tp):
                "fontSize":"10px","color":MUTED,"letterSpacing":"0.8px","textTransform":"uppercase"},
         children=[html.Span(c) for c in
                   ["Ticker","Price","EMA-200","% vs EMA","Ret 3m","Ret 6m","Ret 1y",
-                   "①>SHV","②>VGIT","③>ACWI","Signal","Target $"]])
+                   "①>SHV","②>BND","③>ACWI","Signal","Target $"]])
     tbl_rows=[]
     prev=None
     for r in rows:
@@ -1259,7 +1259,7 @@ def build_titans_tab(titans_rows, tv, tp):
     sig_card=html.Div(style=CARD,children=[
         html.H3("Dow Titans Signal Scanner",style={"margin":"0 0 4px","fontSize":"13px",
                                                     "color":ACCENT3,"letterSpacing":"1px"}),
-        html.P("Gate 1: Price>EMA-200  |  ①: 6m>SHV  |  ②: 6m>VGIT  |  ③: 3m+6m+1y>ACWI",
+        html.P("Gate 1: Price>EMA-200  |  ①: 6m>SHV  |  ②: 6m>BND  |  ③: 3m+6m+1y>ACWI",
                style={"fontSize":"11px","color":MUTED,"margin":"0 0 12px"}),
         tbl_hdr,*tbl_rows])
 
