@@ -1,9 +1,9 @@
 {
-  "total_value": 5200,
-  "core_pct": 30,
-  "mom_pct": 20,
-  "titans_pct": 20,
-  "cash_pct": 30,
+  "total_value": 5200.0,
+  "core_pct": 30.0,
+  "mom_pct": 20.0,
+  "titans_pct": 20.0,
+  "cash_pct": 30.0,
   "holdings": {
     "VTI": {
       "shares": null,

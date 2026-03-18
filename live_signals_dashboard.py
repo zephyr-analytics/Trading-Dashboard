@@ -48,16 +48,17 @@ CASH_CLR   = utilities.CASH_CLR
 PIE_COLORS = utilities.PIE_COLORS
 
 # ── portfolio constants ───────────────────────────────────────────────
-CORE_PORTFOLIO  = utilities.CORE_PORTFOLIO
-CORE_TICKERS    = utilities.CORE_TICKERS
-MOM_TOP_N       = utilities.MOM_TOP_N
-MOM_SMA_PERIOD  = utilities.MOM_SMA_PERIOD
-MOM_TARGET_VOL  = utilities.MOM_TARGET_VOL
-DOW_TITANS      = utilities.DOW_TITANS
-TITANS_EMA_PERIOD = utilities.TITANS_EMA_PERIOD
-CASH_INSTRUMENTS= utilities.CASH_INSTRUMENTS
-CASH_LABEL      = utilities.CASH_LABEL
-CASH_WEIGHT_EACH= utilities.CASH_WEIGHT_EACH
+CORE_PORTFOLIO        = utilities.CORE_PORTFOLIO
+CORE_TICKERS          = utilities.CORE_TICKERS
+MOM_TOP_N             = utilities.MOM_TOP_N
+MOM_SMA_PERIOD        = utilities.MOM_SMA_PERIOD
+MOM_TARGET_VOL        = utilities.MOM_TARGET_VOL
+DOW_TITANS            = utilities.DOW_TITANS
+TITANS_EMA_PERIOD     = utilities.TITANS_EMA_PERIOD
+TITANS_ACWI_SMA_PERIOD= utilities.TITANS_ACWI_SMA_PERIOD   # circuit breaker
+CASH_INSTRUMENTS      = utilities.CASH_INSTRUMENTS
+CASH_LABEL            = utilities.CASH_LABEL
+CASH_WEIGHT_EACH      = utilities.CASH_WEIGHT_EACH
 
 _SAVED = utilities.load_saved()
 
@@ -272,8 +273,11 @@ def build_overview(core_mkt, mom_sig, titans_rows, holdings, tv, cp, mp, tp, xp=
     mom_cash_w  = mom_sig.get("cash_weight", 1.0) if mom_sig else 1.0
     mom_as_of   = mom_sig.get("as_of", "—") if mom_sig else "—"
 
-    eligible_t  = [r for r in (titans_rows or []) if r.get("signal") == "BUY"]
-    n_elig_t    = len(eligible_t)
+    # Titans circuit breaker — pull from rows
+    titans_acwi_ok = next((r["acwi_above_sma"] for r in (titans_rows or []) if "acwi_above_sma" in r), True)
+    eligible_t     = [r for r in (titans_rows or []) if r.get("signal") == "BUY"] if titans_acwi_ok else []
+    n_elig_t       = len(eligible_t)
+
     n_above_core= sum(1 for t, cfg in CORE_PORTFOLIO.items()
                       if utilities.sma_signal((core_mkt or {}).get(t, {}), cfg["sma_period"]) == "BUY")
 
@@ -404,26 +408,48 @@ def build_overview(core_mkt, mom_sig, titans_rows, holdings, tv, cp, mp, tp, xp=
         *mom_rows,
     ])
 
-    # Titans summary
+    # Titans summary — show circuit breaker state
+    acwi_px  = next((r["acwi_price"]   for r in (titans_rows or []) if "acwi_price"   in r), None)
+    acwi_sma = next((r["acwi_sma_val"] for r in (titans_rows or []) if "acwi_sma_val" in r), None)
+
     buy_tickers = [r["ticker"] for r in (titans_rows or []) if r.get("signal") == "BUY"]
     wt_each     = (100 / n_elig_t) if n_elig_t else None
-    titans_card = port_card("Dow Titans", titans_alloc, ACCENT3, [
-        html.Div(
+
+    titans_summary_body = []
+    if not titans_acwi_ok:
+        titans_summary_body.append(html.Div(
+            style={"backgroundColor": "#2d0a0a", "border": f"1px solid {RED}",
+                   "borderRadius": "6px", "padding": "8px 12px", "marginBottom": "8px",
+                   "fontSize": "11px", "color": RED, "fontWeight": "700"},
+            children=[
+                "⛔ CIRCUIT BREAKER — IN CASH  ",
+                html.Span(
+                    f"ACWI {_fmt(acwi_px)} < SMA-{TITANS_ACWI_SMA_PERIOD} {_fmt(acwi_sma)}"
+                    if acwi_px and acwi_sma else "",
+                    style={"color": MUTED, "fontWeight": "400"},
+                ),
+            ],
+        ))
+    else:
+        titans_summary_body.append(html.Div(
             f"{n_elig_t}/{len(DOW_TITANS)} eligible  •  Equal weight {wt_each:.1f}% each"
             if wt_each else f"{n_elig_t}/{len(DOW_TITANS)} eligible",
             style={"fontSize": "11px", "color": MUTED, "marginBottom": "8px"},
-        ),
-        html.Div(style={"display": "flex", "flexWrap": "wrap", "gap": "5px"}, children=[
-            html.Span(t, style={"backgroundColor": "#1a1033", "color": "#86efac",
-                                "borderRadius": "4px", "padding": "2px 7px",
-                                "fontSize": "10px", "fontWeight": "600"})
-            for t in buy_tickers
-        ]),
-    ])
+        ))
+        titans_summary_body.append(
+            html.Div(style={"display": "flex", "flexWrap": "wrap", "gap": "5px"}, children=[
+                html.Span(t, style={"backgroundColor": "#1a1033", "color": "#86efac",
+                                    "borderRadius": "4px", "padding": "2px 7px",
+                                    "fontSize": "10px", "fontWeight": "600"})
+                for t in buy_tickers
+            ])
+        )
+
+    titans_card = port_card("Dow Titans", titans_alloc, ACCENT3 if titans_acwi_ok else RED,
+                            titans_summary_body)
 
     # Cash summary
     cash_per_val = (tv * xp_f) * CASH_WEIGHT_EACH
-    cash_mkt_ov  = cash_mkt or {}
     cash_instr_rows = [
         html.Div(
             style={"display": "flex", "justifyContent": "space-between", "alignItems": "center",
@@ -876,25 +902,89 @@ def build_momentum_tab(mom_sig, tv, mp):
 #  TAB 4 — DOW TITANS
 # ═══════════════════════════════════════════════════════════════════════
 def build_titans_tab(titans_rows, tv, tp):
-    rows     = titans_rows or []
-    eligible = [r for r in rows if r.get("signal") == "BUY"]
+    rows = titans_rows or []
+
+    # ── Circuit breaker: pull ACWI SMA state stamped on row 0 ────────────
+    acwi_ok  = next((r["acwi_above_sma"] for r in rows if "acwi_above_sma" in r), True)
+    acwi_px  = next((r["acwi_price"]     for r in rows if "acwi_price"     in r), None)
+    acwi_sma = next((r["acwi_sma_val"]   for r in rows if "acwi_sma_val"   in r), None)
+
+    # Only count / show eligible positions when circuit breaker is clear
+    eligible = [r for r in rows if r.get("signal") == "BUY"] if acwi_ok else []
     n_elig   = len(eligible)
     alloc    = ((tv or 0) * (tp or 0) / 100) or 0
     wt_each  = (alloc / n_elig) if n_elig else None
     bench    = next((r["bench"] for r in rows if "bench" in r), {})
 
+    # ── KPIs ─────────────────────────────────────────────────────────────
     kpis = html.Div(
         style={"display": "flex", "gap": "14px", "marginBottom": "20px",
                "flexWrap": "wrap", "paddingTop": "20px"},
         children=[
             _kpi("Titans Allocation", _fmt(alloc), ACCENT3, f"{tp or 0:.1f}% of total", ACCENT3),
-            _kpi("Eligible", f"{n_elig}/{len(DOW_TITANS)}", ACCENT3, "passing all 4 gates"),
-            _kpi("Weight per Stock", f"{100/n_elig:.2f}%" if n_elig else "—", TEXT,
-                 _fmt(wt_each) + " each" if wt_each else "No eligible"),
+            _kpi(
+                "Eligible",
+                f"{n_elig}/{len(DOW_TITANS)}" if acwi_ok else "0 — IN CASH",
+                ACCENT3 if acwi_ok else RED,
+                "passing all gates" if acwi_ok else "circuit breaker active",
+            ),
+            _kpi(
+                "Weight per Stock",
+                f"{100/n_elig:.2f}%" if n_elig else "—",
+                TEXT,
+                _fmt(wt_each) + " each" if wt_each else ("In cash" if not acwi_ok else "No eligible"),
+            ),
             _kpi("EMA Filter", f"EMA-{TITANS_EMA_PERIOD}", MUTED, "Gate 1", bar_color=MUTED),
+            _kpi(
+                f"ACWI SMA-{TITANS_ACWI_SMA_PERIOD}",
+                "▲ ABOVE" if acwi_ok else "▼ BELOW",
+                GREEN if acwi_ok else RED,
+                (f"px {_fmt(acwi_px)}  SMA {_fmt(acwi_sma)}" if acwi_px and acwi_sma
+                 else "Circuit breaker"),
+                bar_color=GREEN if acwi_ok else RED,
+            ),
         ],
     )
 
+    # ── Circuit breaker banner (only shown when triggered) ────────────────
+    circuit_banner = html.Div()
+    if not acwi_ok:
+        circuit_banner = html.Div(
+            style={
+                "backgroundColor": "#2d0a0a",
+                "border": f"2px solid {RED}",
+                "borderRadius": "10px",
+                "padding": "16px 22px",
+                "marginBottom": "20px",
+                "display": "flex",
+                "alignItems": "center",
+                "gap": "14px",
+            },
+            children=[
+                html.Span("⛔", style={"fontSize": "26px", "flexShrink": "0"}),
+                html.Div([
+                    html.Div(
+                        "CIRCUIT BREAKER ACTIVE — ALL TITANS POSITIONS IN CASH",
+                        style={"color": RED, "fontWeight": "800",
+                               "fontSize": "13px", "letterSpacing": "1px"},
+                    ),
+                    html.Div(
+                        (
+                            f"ACWI is trading at {_fmt(acwi_px)}, below its "
+                            f"{TITANS_ACWI_SMA_PERIOD}-day SMA of {_fmt(acwi_sma)}. "
+                            "All Titans positions should be liquidated to cash. "
+                            "Normal operation resumes once ACWI closes back above the SMA."
+                        ) if acwi_px and acwi_sma else
+                        f"ACWI has fallen below its {TITANS_ACWI_SMA_PERIOD}-day SMA. "
+                        "Titans strategy is fully in cash.",
+                        style={"color": MUTED, "fontSize": "12px", "marginTop": "5px",
+                               "lineHeight": "1.5"},
+                    ),
+                ]),
+            ],
+        )
+
+    # ── Benchmark card ────────────────────────────────────────────────────
     bench_items = [
         html.Div(
             style={"display": "flex", "justifyContent": "space-between", "padding": "5px 0",
@@ -908,6 +998,19 @@ def build_titans_tab(titans_rows, tv, tp):
         for lbl, key in [("SHV 6m", "shv_6m"), ("BND 6m", "bnd_6m"),
                           ("ACWI 3m", "acwi_3m"), ("ACWI 6m", "acwi_6m")]
     ]
+    # Append ACWI SMA status line to benchmark card
+    bench_items.append(html.Div(
+        style={"display": "flex", "justifyContent": "space-between", "padding": "8px 0 2px",
+               "fontSize": "12px", "marginTop": "4px",
+               "borderTop": f"1px solid {CARD_BORDER}"},
+        children=[
+            html.Span(f"ACWI SMA-{TITANS_ACWI_SMA_PERIOD}", style={"color": MUTED}),
+            html.Span(
+                "▲ ABOVE" if acwi_ok else "▼ BELOW",
+                style={"color": GREEN if acwi_ok else RED, "fontWeight": "700"},
+            ),
+        ],
+    ))
     bench_card = html.Div(style={**CARD, "marginBottom": "0"}, children=[
         html.H3("Benchmark Returns",
                 style={"margin": "0 0 10px", "fontSize": "13px",
@@ -915,6 +1018,7 @@ def build_titans_tab(titans_rows, tv, tp):
         *bench_items,
     ])
 
+    # ── Signal table ──────────────────────────────────────────────────────
     col = "58px 80px 80px 80px 80px 80px 80px 50px 50px 50px 80px 90px"
     tbl_hdr = html.Div(
         style={"display": "grid", "gridTemplateColumns": col, "gap": "4px",
@@ -934,7 +1038,10 @@ def build_titans_tab(titans_rows, tv, tp):
             tbl_rows.append(html.Hr(style={"borderColor": CARD_BORDER, "margin": "4px 0"}))
         prev   = r.get("signal")
         is_buy = r.get("signal") == "BUY"
-        sc     = GREEN if is_buy else RED
+
+        # When circuit breaker is active, no row is treated as actionable BUY
+        effective_buy = is_buy and acwi_ok
+        sc = GREEN if effective_buy else (MUTED if is_buy else RED)
 
         def fr(v):
             return f"{v:+.1f}%" if v is not None else "—"
@@ -943,39 +1050,58 @@ def build_titans_tab(titans_rows, tv, tp):
             style={"display": "grid", "gridTemplateColumns": col, "gap": "4px",
                    "padding": "8px 0", "borderBottom": f"1px solid {CARD_BORDER}",
                    "fontSize": "12px", "alignItems": "center",
-                   "opacity": "1" if is_buy else "0.55"},
+                   # dim all rows when circuit breaker is active; otherwise dim non-BUY rows
+                   "opacity": "0.35" if (not acwi_ok) else ("1" if is_buy else "0.55")},
             children=[
-                html.Span(r["ticker"], style={"fontWeight": "700", "color": ACCENT3 if is_buy else MUTED}),
+                html.Span(r["ticker"],
+                          style={"fontWeight": "700",
+                                 "color": MUTED if not acwi_ok else (ACCENT3 if is_buy else MUTED)}),
                 html.Span(_fmt(r.get("price"))),
                 html.Span(_fmt(r.get("ema")), style={"color": MUTED}),
                 html.Span(f"{r['pct_ema']:+.2f}%" if r.get("pct_ema") is not None else "—",
-                          style={"color": _pcolor(r.get("pct_ema")), "fontWeight": "600"}),
-                html.Span(fr(r.get("r3m")), style={"color": _pcolor(r.get("r3m"))}),
-                html.Span(fr(r.get("r6m")), style={"color": _pcolor(r.get("r6m"))}),
+                          style={"color": _pcolor(r.get("pct_ema")) if acwi_ok else MUTED,
+                                 "fontWeight": "600"}),
+                html.Span(fr(r.get("r3m")),
+                          style={"color": _pcolor(r.get("r3m")) if acwi_ok else MUTED}),
+                html.Span(fr(r.get("r6m")),
+                          style={"color": _pcolor(r.get("r6m")) if acwi_ok else MUTED}),
                 html.Span("✓" if r.get("f1") else "✗",
-                          style={"color": "#86efac" if r.get("f1") else RED, "fontWeight": "700"}),
+                          style={"color": ("#86efac" if r.get("f1") else RED) if acwi_ok else MUTED,
+                                 "fontWeight": "700"}),
                 html.Span("✓" if r.get("f2") else "✗",
-                          style={"color": "#86efac" if r.get("f2") else RED, "fontWeight": "700"}),
+                          style={"color": ("#86efac" if r.get("f2") else RED) if acwi_ok else MUTED,
+                                 "fontWeight": "700"}),
                 html.Span("✓" if r.get("f3") else "✗",
-                          style={"color": "#86efac" if r.get("f3") else RED, "fontWeight": "700"}),
-                html.Span("✅ BUY" if is_buy else "❌ OUT",
-                          style={"color": sc, "fontWeight": "700", "fontSize": "11px"}),
-                html.Span(_fmt(wt_each) if (is_buy and wt_each) else "—",
-                          style={"color": ACCENT3 if (is_buy and wt_each) else MUTED,
-                                 "fontWeight": "600" if is_buy else "400"}),
+                          style={"color": ("#86efac" if r.get("f3") else RED) if acwi_ok else MUTED,
+                                 "fontWeight": "700"}),
+                html.Span(
+                    "⛔ CASH" if not acwi_ok else ("✅ BUY" if is_buy else "❌ OUT"),
+                    style={"color": RED if not acwi_ok else sc,
+                           "fontWeight": "700", "fontSize": "11px"},
+                ),
+                html.Span(
+                    "—" if not acwi_ok else (_fmt(wt_each) if (is_buy and wt_each) else "—"),
+                    style={"color": MUTED if not acwi_ok else (ACCENT3 if (is_buy and wt_each) else MUTED),
+                           "fontWeight": "600" if (effective_buy) else "400"},
+                ),
             ],
         ))
     sig_card = html.Div(style=CARD, children=[
         html.H3("Dow Titans Signal Scanner",
                 style={"margin": "0 0 4px", "fontSize": "13px",
-                       "color": ACCENT3, "letterSpacing": "1px"}),
-        html.P("Gate 1: Price>EMA-200  |  ①: 6m>SHV  |  ②: 6m>BND  |  ③: 3m+6m+1y>ACWI",
-               style={"fontSize": "11px", "color": MUTED, "margin": "0 0 12px"}),
+                       "color": ACCENT3 if acwi_ok else RED, "letterSpacing": "1px"}),
+        html.P(
+            f"Gate 1: Price>EMA-{TITANS_EMA_PERIOD}  |  "
+            f"①: 6m>SHV  |  ②: 6m>BND  |  ③: 3m+6m>ACWI  |  "
+            f"Circuit: ACWI>SMA-{TITANS_ACWI_SMA_PERIOD}",
+            style={"fontSize": "11px", "color": MUTED, "margin": "0 0 12px"},
+        ),
         tbl_hdr, *tbl_rows,
     ])
 
+    # ── Eligible chart (hidden when circuit breaker active) ───────────────
     elig_chart = html.Div()
-    if eligible:
+    if eligible and acwi_ok:
         eq_t = [r["ticker"] for r in eligible]
         eq_v = [wt_each] * n_elig if wt_each else [1 / n_elig] * n_elig
         ef   = go.Figure(go.Bar(
@@ -999,6 +1125,7 @@ def build_titans_tab(titans_rows, tv, tp):
 
     return html.Div([
         kpis,
+        circuit_banner,
         html.Div(style={"display": "grid", "gridTemplateColumns": "200px 1fr",
                         "gap": "20px", "alignItems": "start"},
                  children=[bench_card, html.Div([sig_card, elig_chart])]),
@@ -1121,7 +1248,7 @@ def build_master_table(core_mkt, mom_sig, titans_rows, cash_mkt, holdings, tv, c
         })
 
     # Core
-    core_alloc   = tv * cp / 100
+    core_alloc = tv * cp / 100
     for t, cfg in CORE_PORTFOLIO.items():
         md    = (core_mkt or {}).get(t, {})
         sig   = utilities.sma_signal(md, cfg["sma_period"])
@@ -1148,16 +1275,20 @@ def build_master_table(core_mkt, mom_sig, titans_rows, cash_mkt, holdings, tv, c
         if cw > 0.001:
             add_row("Momentum", "CASH(SGOV)", MUTED, None, mom_alloc * cw)
 
-    # Dow Titans
-    titans_alloc = tv * tp / 100
-    elig_t = [r for r in (titans_rows or []) if r.get("signal") == "BUY"]
-    n_e    = len(elig_t)
-    if n_e:
+    # Dow Titans — respect circuit breaker
+    titans_alloc  = tv * tp / 100
+    acwi_ok_mt    = next((r["acwi_above_sma"] for r in (titans_rows or []) if "acwi_above_sma" in r), True)
+    elig_t        = [r for r in (titans_rows or []) if r.get("signal") == "BUY"] if acwi_ok_mt else []
+    n_e           = len(elig_t)
+    if acwi_ok_mt and n_e:
         wt_each = titans_alloc / n_e
         for r in elig_t:
             price = r.get("price")
             add_row("Dow Titans", r["ticker"], ACCENT3, price, wt_each,
                     (wt_each / price) if (wt_each and price) else None)
+    else:
+        # Circuit breaker active — show as a single cash line
+        add_row("Dow Titans", "CASH (circuit breaker)", RED, 1.0, titans_alloc)
 
     # Cash
     cash_alloc = tv * xp / 100

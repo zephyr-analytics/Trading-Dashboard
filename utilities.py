@@ -78,6 +78,7 @@ MOM_TARGET_VOL      = 0.20
 MOM_MAX_WEIGHT      = 1.0
 MOM_TOP_N           = 2
 _MOM_N_BARS         = MOM_MAX_LOOKBACK + MOM_SMA_PERIOD + 10
+TITANS_ACWI_SMA_PERIOD = 168
 
 # ── Dow Titans ──────────────────────────────────────────────────────
 DOW_TITANS: list[str] = [
