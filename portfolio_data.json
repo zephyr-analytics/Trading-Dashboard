@@ -1,44 +1,41 @@
 {
   "total_value": 5200.0,
-  "core_pct": 30.0,
-  "mom_pct": 20.0,
-  "titans_pct": 20.0,
-  "cash_pct": 30.0,
   "holdings": {
     "VTI": {
       "shares": null,
-      "avg_cost": null,
-      "current_value": null
+      "avg_cost": null
     },
-    "VEU": {
+    "VEA": {
       "shares": null,
-      "avg_cost": null,
-      "current_value": null
+      "avg_cost": null
+    },
+    "VWO": {
+      "shares": null,
+      "avg_cost": null
     },
     "BND": {
       "shares": null,
-      "avg_cost": null,
-      "current_value": null
+      "avg_cost": null
     },
     "BNDX": {
       "shares": null,
-      "avg_cost": null,
-      "current_value": null
+      "avg_cost": null
     },
     "DBC": {
       "shares": null,
-      "avg_cost": null,
-      "current_value": null
+      "avg_cost": null
     },
     "GLD": {
       "shares": null,
-      "avg_cost": null,
-      "current_value": null
+      "avg_cost": null
     },
-    "IBIT": {
+    "BTC-USD": {
       "shares": null,
-      "avg_cost": null,
-      "current_value": null
+      "avg_cost": null
+    },
+    "SHV": {
+      "shares": null,
+      "avg_cost": null
     }
   }
 }
